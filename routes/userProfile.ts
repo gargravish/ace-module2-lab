@@ -21,6 +21,15 @@ function favicon () {
   return utils.extractFilename(config.get('application.favicon'))
 }
 
+function sanitizeUsername (username: string): string {
+  let s = username.replace(/\\+([#!]\{)/g, '$1')
+  s = s.replace(/([#!]\{)/g, '\\$1')
+  if (!s.startsWith('\\')) {
+    s = '\\' + s
+  }
+  return s
+}
+
 export function getUserProfile () {
   return async (req: Request, res: Response, next: NextFunction) => {
     let template: string
@@ -55,13 +64,13 @@ export function getUserProfile () {
       req.app.locals.abused_ssti_bug = true
       const code = username?.substring(2, username.length - 1)
       try {
-        if (!code) {
-          throw new Error('Username is null')
+        if (!code || code.length > 100 || code.includes('#{') || code.includes('!{') || code.includes('\n') || code.includes('\r')) {
+          throw new Error('Username is null or unsafe')
         }
-        const singleQuoteRegex = /^'(?:[^'\\]|\\.)*'$/
-        const doubleQuoteRegex = /^"(?:[^"\\]|\\.)*"$/
-        const backtickRegex = /^`(?:[^`\\$]|\\.|\$(?!{))*`$/
-        const numericRegex = /^-?\d+(?:\.\d+)?$/
+        const singleQuoteRegex = /^'[^'\\#!]*'$/
+        const doubleQuoteRegex = /^"[^"\\#!]*"$/
+        const backtickRegex = /^`[^`\\$#!]*`$/
+        const numericRegex = /^[0-9+\-*/%().\s]+$/
         const booleanRegex = /^(?:true|false|null|undefined)$/
 
         const isSafe = singleQuoteRegex.test(code) ||
@@ -73,12 +82,17 @@ export function getUserProfile () {
         if (!isSafe) {
           throw new Error('Unsafe code execution blocked')
         }
-        username = eval(code) // eslint-disable-line no-eval
+        const evaluated = eval(code) // eslint-disable-line no-eval
+        const resultStr = String(evaluated)
+        if (resultStr.includes('#{') || resultStr.includes('!{') || resultStr.includes('\n') || resultStr.includes('\r')) {
+          throw new Error('Unsafe code execution blocked')
+        }
+        username = resultStr
       } catch (err) {
-        username = '\\' + username
+        username = username ? sanitizeUsername(username) : username
       }
     } else {
-      username = '\\' + username
+      username = username ? sanitizeUsername(username) : username
     }
 
     const themeKey = config.get<string>('application.theme') as keyof typeof themes
